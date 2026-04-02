@@ -1,0 +1,32 @@
+global_input_parameters.f90 -
+  C_alp
+  frac_seed 
+  p_ISM_sound_speed_km_s
+  fmag
+                           
+constant.f90 - 
+   alpceil
+
+profiles.f90
+  Eqn for Beq (line number ~ 220)
+
+
+
+#p_ISM_sound_speed_km_s is used in 
+
+surface_density.f90
+    midplane_pressure_Elmegreen - This function is used by magnetizer  
+pressureEquilibrium.f90  - in 2 subroutine/function
+    computes_midplane_ISM_pressure_from_B_and_rho - This function used in magnetizer
+                      This was an elemental function. Now changed to function 
+    solve_hydrostatic_equilibrium_cubic  - This function not used in magnetizer 
+profiles.f90  
+    construct_profiles - converted to v_km_s and used to compute many things like Beq, tau etc.
+
+
+#tau appears in global_input_parameters.f90. Not sure if it is used everywhere 
+tau is independently calculated in profiles.f90. Probably it is the one used everywhere. Also ctau=1 in constants.f90
+
+#taus - not used anywhere
+
+#what is fmag -> to be asked to Luiz

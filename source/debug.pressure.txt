@@ -1,0 +1,142 @@
+diff pressureEquilibrium.f90 backup/pressureEquilibrium.f90 
+27c27
+<                           Mstars_bulge, SFR, Mgas_disk, nfw_cs1
+---
+>                           Mstars_bulge, Mgas_disk, nfw_cs1
+32a33
+>   public solve_hydrostatic_equilibrium_cubic
+312,313c313,421
+< !CJ . Below subroutine is not used in magnetizer
+< ! subroutine solve_hydrostatic_equilibrium_cubic(rdisk, M_g, M_star, r, B,  &
+---
+> 
+>   subroutine solve_hydrostatic_equilibrium_cubic(rdisk, M_g, M_star, r, B,  &
+>                                           rho_d, h_d, &
+>                                           Sigma_star_out, Sigma_d_out, Rm_out,&
+>                                           all_roots)
+>     ! Computes the mid-plane density and scale height under the assumption of
+>     ! hydrostatic equilibrium
+>     ! Input:  rdisk -> half mass radius of the disk (kpc)
+>     !         M_g -> total gas mass (Msun)
+>     !         M_star -> total stellar mass (Msun)
+>     !         r -> radii array (kpc)
+>     !         B -> magnetic field array (microgauss)
+>     ! Output: rho_d -> density profile of the gas at the midplane (g/cm^3)
+>     !         h_d   -> scaleheight profile of the gas at the midplane (kpc)
+>     ! Optional outputs (all as function of r)
+>     !         Sigma_star_out -> The surface density profile of stars (n-array)
+>     !         Sigma_d_out -> The surface density profile of diffuse gas (n-array)
+>     !         Rm_out -> Molecular to atomic gas ratio profile (n-array)
+>     !         all_roots -> outputs all roots from the solve (nx3-array)
+>     !
+>     use input_constants
+>     use root_finder
+>     double precision, intent(in) :: rdisk, M_g, M_star
+>     double precision, dimension(:), intent(in) :: r, B
+>     double precision, dimension(size(r)), intent(out) :: rho_d, h_d
+>     double precision, dimension(size(r),3), intent(out),optional :: all_roots
+>     double precision, dimension(size(r)), intent(out), optional ::    &
+>                                           Rm_out, Sigma_d_out, Sigma_star_out
+>     double precision, dimension(size(r)) :: a0, a1, a2, a3
+>     double precision, dimension(size(r)) :: Sigma_g_nonSI, Sigma_star_nonSI
+>     double precision, dimension(size(r)) :: Sigma_d, Sigma_star, Sigma_d_nonSI
+>     double precision, dimension(size(r)) :: B2_4pi, Rm
+>     double precision :: rs, rs_g_nonSI, A, bm, bs, v0, rs_nonSI
+>     double precision, parameter :: h_guess = 0.2d0*kpc_SI
+>     double precision, dimension(3) :: roots
+>     integer :: i
+>     ! Prepares constants
+>     rs_nonSI = constDiskScaleToHalfMassRatio * rdisk ! kpc
+>     rs_g_nonSI = p_gasScaleRadiusToStellarScaleRadius_ratio * rs_nonSI ! kpc
+>     rs = rs_nonSI * kpc_SI ! m
+>     A = (p_ISM_kappa/3d0*(1d0+2d0*p_ISM_xi) + 1d0/p_ISM_gamma)
+> 
+>     ! Nicknames
+>     bm = p_molecularHeightToRadiusScale
+>     bs = p_stellarHeightToRadiusScale
+>     v0 = p_ISM_sound_speed_km_s * 1d3 ! m/s
+> 
+>     ! Another shorthand: (B_Gauss)^2/(4\pi)
+>     B2_4pi = (B*1d-6)**2/4d0/pi * 0.1d0 ! 0.1 J/m^3 = 1 erg/cm^3
+> 
+>     ! Computes initial surface density profiles
+>     if (rs_g_nonSI==0 .or. rs_nonSI==0) then
+>       stop 'solve_hydrostatic_equilibrium: Fatal error. Disk of negligible size'
+>     endif
+> 
+>     Sigma_g_nonSI = exp_surface_density(rs_g_nonSI, abs(r), M_g)
+>     Sigma_star_nonSI = exp_surface_density(rs_nonSI, abs(r), M_star)
+> 
+>     ! Computes R_mol
+>     Rm = molecular_to_diffuse_ratio(rdisk, Sigma_g_nonSI, Sigma_star_nonSI)
+> 
+>     ! Computes diffuse gas surface density
+>     Sigma_d_nonSI = Sigma_g_nonSI / (Rm+1d0)
+>     ! Adjusts units of stellar surface density (to SI!)
+>     Sigma_star = (Sigma_star_nonSI*Msun_SI/kpc_SI/kpc_SI)
+>     ! Adjusts units of diffuse gas surface density (to SI!)
+>     Sigma_d = (Sigma_d_nonSI*Msun_SI/kpc_SI/kpc_SI)
+> 
+>     ! Computes the coefficients of the cubic equation
+>     a3 = pi*G_SI*Sigma_d*(Sigma_star + Sigma_d*(Rm + 0.5)) - B2_4pi
+> 
+>     a2 =  -B2_4pi*(bm+bs)*rs - A/2d0*Sigma_d*v0**2 &
+>         + pi*G_SI*Sigma_d*(Sigma_star*bm + Sigma_d*(bs*Rm + 0.5*bm + 0.5*bs))*rs
+> 
+>     a1 = - (B2_4pi - pi/2d0*G_SI*Sigma_d**2)*rs**2*bm*bs &
+>         - A/2d0 * Sigma_d * v0**2 * rs * (bm+bs)
+> 
+>     a0 = -A/2d0 * Sigma_d * v0**2 * rs**2 * bm * bs
+> 
+>     ! Solves the cubic equation
+>     ! (In the case of multiple solutions, considers only those with the
+>     ! correct order of magnitude, i.e. close to h_guess=200pc. This is a quick
+>     ! and dirty way of avoiding the unphysical solutions without having to
+>     ! substitute back in the equation.)
+>     do i=1,size(r)
+> 
+>       if (Sigma_d_nonSI(i) < 0.01) then
+>         rho_d(i) = 1d-28
+>         h_d(i) = Sigma_d(i)/rho_d(i)/2d0 / density_SI_to_cgs
+>       else
+>         h_d(i) = CubicRootClose(a3(i), a2(i), a1(i), a0(i), h_guess, roots)
+>       endif
+> 
+>       if (h_d(i)>1d-10) then
+>         rho_d(i) = Sigma_d(i)/h_d(i)/2d0 * density_SI_to_cgs
+>       else
+>         rho_d(i) = 1d-100
+>       end if
+>       h_d(i) = h_d(i)/kpc_SI
+>       ! Outputs all roots if required
+>       if (present(all_roots)) all_roots(i,:) = roots(:)/kpc_SI
+>     end do
+>     ! Outputs optional quantities
+>     if (present(Rm_out)) Rm_out=Rm
+>     if (present(Sigma_star_out)) Sigma_star_out=Sigma_star_nonSI
+>     if (present(Sigma_d_out)) Sigma_d_out=Sigma_d_nonSI
+> 
+>     return
+>   end subroutine solve_hydrostatic_equilibrium_cubic
+453,455c561
+< !  elemental function computes_midplane_ISM_pressure_from_B_and_rho(B, rho) result(P)
+<   function computes_midplane_ISM_pressure_from_B_and_rho(B, rho) result(P)
+<                                               !added by CJ
+---
+>   elemental function computes_midplane_ISM_pressure_from_B_and_rho(B, rho) result(P)
+463,473c569,570
+<     !P = (B*1d-6)**2/4d0/pi + (p_ISM_kappa/3d0*(1.+2.*p_ISM_xi) + 1d0/p_ISM_gamma) &
+<     !                         * (p_ISM_sound_speed_km_s*1d5)**2 * rho
+<     !P = (B*1d-6)**2/4d0/pi + (p_ISM_kappa/3d0*(1.+2.*p_ISM_xi) + 1d0/p_ISM_gamma) &
+<     !    *(ISM_sound_speed_km_s(Mstars_disk+Mstars_bulge,SFR,Mgas_disk)*1d5)**2 *rho
+<                                                     !added by CJ
+<     P= rho* ( 1d0 / p_ISM_gamma +  (1.+ 3.* fmag**2 ) * p_ISM_kappa/3.0 ) * & 
+<       (1d5*ISM_sound_speed_km_s(Mstars_disk+Mstars_bulge,SFR,Mgas_disk) )**2 &
+<         + (B*1d-6)**2/4d0/pi 
+<                                      !added by CJ based on Lukes Notes
+<                                      ! p_ISM_xi =3/2 *fBeq**2
+<    
+---
+>     P = (B*1d-6)**2/4d0/pi + (p_ISM_kappa/3d0*(1.+2.*p_ISM_xi) + 1d0/p_ISM_gamma) &
+>                              * (p_ISM_sound_speed_km_s*1d5)**2 * rho
+
